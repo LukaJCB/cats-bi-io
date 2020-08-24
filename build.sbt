@@ -25,6 +25,7 @@ ThisBuild / githubWorkflowPublishTargetBranches :=
   Seq(RefPredicate.StartsWith(Ref.Tag("v")))
 
 ThisBuild / githubWorkflowPublish := Seq(
+  WorkflowStep.Run(List("export GPG_TTY=$(tty)")),
   WorkflowStep.Sbt(
     List("ci-release"),
     env = Map(
