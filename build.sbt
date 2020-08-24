@@ -20,7 +20,20 @@ inThisBuild(
   )
 )
 
-scalacOptions ++= Seq(
+ThisBuild / githubWorkflowTargetTags ++= Seq("v*")
+ThisBuild / githubWorkflowPublishTargetBranches :=
+  Seq(RefPredicate.StartsWith(Ref.Tag("v")))
+
+ThisBuild / githubWorkflowPublish := Seq(WorkflowStep.Sbt(List("ci-release")))
+ThisBuild / githubWorkflowBuild := Seq(WorkflowStep.Sbt(List("fmtCheck", "test")))
+ThisBuild / githubWorkflowEnv := Map(
+  "PGP_PASSPHRASE" -> "${{ secrets.PGP_PASSPHRASE }}",
+  "PGP_SECRET" -> "${{ secrets.PGP_SECRET }}",
+  "SONATYPE_PASSWORD" -> "${{ secrets.SONATYPE_PASSWORD }}",
+  "SONATYPE_USERNAME" -> "${{ secrets.SONATYPE_USERNAME }}"
+)
+ThisBuild / crossScalaVersions := supportedScalaVersions
+ThisBuild / scalacOptions ++= Seq(
   "-deprecation",
   "-encoding",
   "UTF-8",
@@ -39,25 +52,15 @@ addCommandAlias("fmtAll", ";scalafmt; test:scalafmt; scalafmtSbt")
 addCommandAlias("fmtCheck", ";scalafmtCheck; test:scalafmtCheck; scalafmtSbtCheck")
 
 lazy val commonSettings = Seq(
-  crossScalaVersions := supportedScalaVersions,
   addCompilerPlugin(("org.typelevel" %% "kind-projector" % "0.11.0").cross(CrossVersion.full)),
   addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1")
 )
-
-lazy val publishSettings = Seq(
-  publishArtifact in Test := false,
-  pomIncludeRepository := { _ =>
-    false
-  }
-)
-
 
 val catsEffectV = "2.1.4"
 val disciplineMunitV = "0.2.3"
 
 lazy val root = (project in file("core"))
   .settings(commonSettings)
-  .settings(publishSettings)
   .settings(
     name := "cats-bi-io",
     libraryDependencies ++= Seq(
