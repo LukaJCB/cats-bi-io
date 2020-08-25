@@ -25,7 +25,7 @@ ThisBuild / githubWorkflowPublishTargetBranches :=
   Seq(RefPredicate.StartsWith(Ref.Tag("v")))
 
 ThisBuild / githubWorkflowPublish := Seq(
-  WorkflowStep.Run(List("export GPG_TTY=$(tty)")),
+  WorkflowStep.Use("olafurpg", "setup-gpg", "v2"),
   WorkflowStep.Sbt(
     List("ci-release"),
     env = Map(
