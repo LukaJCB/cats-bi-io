@@ -45,6 +45,7 @@ ThisBuild / scalacOptions ++= Seq(
   "UTF-8",
   "-language:higherKinds",
   "-language:postfixOps",
+  "-language:implicitConversions",
   "-feature",
   "-Ywarn-value-discard",
   "-Ywarn-dead-code",
@@ -62,10 +63,14 @@ lazy val commonSettings = Seq(
   addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1")
 )
 
+lazy val noPublishSettings = Seq(
+  skip in publish := true
+)
+
 val catsEffectV = "2.1.4"
 val disciplineMunitV = "0.2.3"
 
-lazy val root = (project in file("core"))
+lazy val core = (project in file("core"))
   .settings(commonSettings)
   .settings(
     name := "cats-bi-io",

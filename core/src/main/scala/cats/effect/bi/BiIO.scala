@@ -19,9 +19,12 @@ import cats.effect.Bracket
 import cats.effect.concurrent.Ref
 
 object BiIO extends BiIOInstances {
-  def raiseError[E](e: E): BiIO[E, Nothing] = create(BaseIO.raiseError(new CustomException(e)))
+  implicit def biIOOps[F[_], E, A](e: BiIO[E, A]): BiIOOps[E, A] =
+    new BiIOOps[E, A](e) {}
 
-  def terminate(e: Throwable): IO[Nothing] = create(BaseIO.raiseError(e))
+  def raiseError[E](e: E): BiIO[E, INothing] = create(BaseIO.raiseError(new CustomException(e)))
+
+  def terminate(e: Throwable): IO[INothing] = create(BaseIO.raiseError(e))
 
   def pure[A](a: A): IO[A] = create(BaseIO.pure(a))
 
@@ -85,7 +88,7 @@ object BiIO extends BiIOInstances {
       case Failure(e) => terminate(e)
     }
 
-  def cancelable[A](k: (Either[Throwable, A] => Unit) => BiIO[Nothing, Unit]): IO[A] =
+  def cancelable[A](k: (Either[Throwable, A] => Unit) => BiIO[INothing, Unit]): IO[A] =
     create(BaseIO.cancelable[A](cb => embed(k(cb))))
 
   def cancelableBi[E, A](k: (Either[E, A] => Unit) => BiIO[E, Unit]): BiIO[E, A] =
@@ -98,10 +101,10 @@ object BiIO extends BiIOInstances {
       )
     )
 
-  def fromFuture[A](f: BiIO[Nothing, Future[A]])(implicit cs: ContextShift[IO]): IO[A] =
+  def fromFuture[A](f: BiIO[INothing, Future[A]])(implicit cs: ContextShift[IO]): IO[A] =
     create(BaseIO.fromFuture(embed(f))(contextShiftForBaseIO(cs)))
 
-  val never: IO[Nothing] =
+  val never: IO[INothing] =
     create(BaseIO.never)
 
   val cancelBoundary: IO[Unit] =
@@ -149,6 +152,46 @@ object BiIO extends BiIOInstances {
     e.asInstanceOf[BaseIO[A]]
 
   private[bi] case class CustomException[+E](e: E) extends Exception
+}
+
+sealed abstract private[bi] class BiIOOps[+E, +A](val bio: BiIO[E, A]) {
+
+  def attempt: BiIO[E, Either[E, A]] =
+    BiIO.create(
+      BiIO
+        .embed(bio)
+        .redeemWith(
+          {
+            case BiIO.CustomException(e) => BaseIO.pure(Left(e.asInstanceOf[E]))
+            case e => BaseIO.raiseError(e)
+          },
+          a => BaseIO.pure(Right(a))
+        )
+    )
+
+  def attemptBi[EE >: E, AA >: A]: IO[Either[EE, AA]] =
+    BiIO.create(
+      BiIO
+        .embed(bio)
+        .redeemWith(
+          {
+            case BiIO.CustomException(e) => BaseIO.pure(Left(e.asInstanceOf[E]))
+            case e => BaseIO.raiseError(e)
+          },
+          a => BaseIO.pure(Right(a))
+        )
+    )
+
+  def toBaseIO: BaseIO[A] = BiIO.embed(bio)
+
+  def map[B](f: A => B): BiIO[E, B] = BiIO.create(BiIO.embed(bio).map(f))
+
+  def toEitherT[EE >: E, AA >: A]: EitherT[BaseIO, EE, AA] = EitherT(BiIO.embed(attemptBi))
+
+  def unsafeRunToEither(): Either[E, A] = BiIO.embed(attempt).unsafeRunSync()
+
+  def unsafeRunSync(): A = BiIO.embed(bio).unsafeRunSync()
+
 }
 
 abstract private[bi] class BiIOInstances {
