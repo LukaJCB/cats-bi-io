@@ -17,6 +17,10 @@ import cats.Monad
 import cats.data.EitherT
 import cats.effect.Bracket
 import cats.effect.concurrent.Ref
+import cats.effect.Async
+import cats.Bifunctor
+import cats.SemigroupK
+import cats.MonadError
 
 object BiIO extends BiIOInstances {
   implicit def biIOOps[F[_], E, A](e: BiIO[E, A]): BiIOOps[E, A] =
@@ -182,6 +186,11 @@ sealed abstract private[bi] class BiIOOps[+E, +A](val bio: BiIO[E, A]) {
         )
     )
 
+  def rethrowBi[EE, AA](implicit ev0: A <:< Either[EE, AA], ev1: E <:< INothing): BiIO[EE, AA] =
+    BiIO.create(
+      BiIO.embed(bio.map(a => ev0(a).leftMap(BiIO.CustomException(_)))).rethrow
+    )
+
   def toBaseIO: BaseIO[A] = BiIO.embed(bio)
 
   def map[B](f: A => B): BiIO[E, B] = BiIO.create(BiIO.embed(bio).map(f))
@@ -194,60 +203,65 @@ sealed abstract private[bi] class BiIOOps[+E, +A](val bio: BiIO[E, A]) {
 
 }
 
-abstract private[bi] class BiIOInstances {
-  implicit def catsEffectBiConcurrentForBiIO[E](implicit cs: ContextShift[BiIO[E, *]]): Concurrent[BiIO[E, *]] =
-    new Concurrent[BiIO[E, *]] {
-      implicit val contextShiftBaseIO: ContextShift[BaseIO] = BiIO.contextShiftForBaseIO
+private[bi] trait MonadBiIO[E] extends Monad[BiIO[E, *]] {
+  def pure[A](x: A): BiIO[E, A] = BiIO.pure(x)
 
-      def pure[A](x: A): BiIO[E, A] = BiIO.pure(x)
+  def flatMap[A, B](fa: BiIO[E, A])(f: A => BiIO[E, B]): BiIO[E, B] =
+    BiIO.create(BiIO.embed(fa).flatMap(a => BiIO.embed(f(a))))
 
-      def raiseError[A](e: Throwable): BiIO[E, A] = BiIO.terminate(e)
+  def tailRecM[A, B](a: A)(f: A => BiIO[E, Either[A, B]]): BiIO[E, B] =
+    BiIO.create(Monad[BaseIO].tailRecM(a)(a => BiIO.embed(f(a))))
+}
 
-      def handleErrorWith[A](fa: BiIO[E, A])(f: Throwable => BiIO[E, A]): BiIO[E, A] =
-        BiIO.create(BiIO.embed(fa).handleErrorWith {
-          case e @ BiIO.CustomException(_) => BaseIO.raiseError(e)
-          case e => BiIO.embed(f(e))
-        })
+private[bi] trait AsyncBiIO[E] extends Async[BiIO[E, *]] with MonadBiIO[E] {
 
-      def flatMap[A, B](fa: BiIO[E, A])(f: A => BiIO[E, B]): BiIO[E, B] =
-        BiIO.create(BiIO.embed(fa).flatMap(a => BiIO.embed(f(a))))
+  def raiseError[A](e: Throwable): BiIO[E, A] = BiIO.terminate(e)
 
-      def tailRecM[A, B](a: A)(f: A => BiIO[E, Either[A, B]]): BiIO[E, B] =
-        BiIO.create(Monad[BaseIO].tailRecM(a)(a => BiIO.embed(f(a))))
+  def handleErrorWith[A](fa: BiIO[E, A])(f: Throwable => BiIO[E, A]): BiIO[E, A] =
+    BiIO.create(BiIO.embed(fa).handleErrorWith {
+      case e @ BiIO.CustomException(_) => BaseIO.raiseError(e)
+      case e => BiIO.embed(f(e))
+    })
 
-      def bracketCase[A, B](acquire: BiIO[E, A])(use: A => BiIO[E, B])(
-        release: (A, ExitCase[Throwable]) => BiIO[E, Unit]
-      ): BiIO[E, B] =
-        BiIO.create(
-          Ref.of[BaseIO, Option[E]](None).flatMap { ref =>
-            BiIO
-              .embed(BiIO.attemptBi(acquire))
-              .bracketCase {
-                case Right(a) => BiIO.embed(BiIO.attemptBi(use(a)))
-                case l @ Left(_) => BaseIO.pure(l.rightCast[B])
-              } {
-                case (Left(_), _) => BaseIO.unit
-                case (Right(a), ExitCase.Completed) =>
-                  BiIO.embed(BiIO.attemptBi(release(a, ExitCase.Completed))).flatMap {
-                    case Left(l) => ref.set(Some(l))
-                    case Right(_) => BaseIO.unit
-                  }
-                case (Right(a), res) => BiIO.embed(BiIO.attemptBi(release(a, res))).void
+  def bracketCase[A, B](acquire: BiIO[E, A])(use: A => BiIO[E, B])(
+    release: (A, ExitCase[Throwable]) => BiIO[E, Unit]
+  ): BiIO[E, B] =
+    BiIO.create(
+      Ref.of[BaseIO, Option[E]](None).flatMap { ref =>
+        BiIO
+          .embed(BiIO.attemptBi(acquire))
+          .bracketCase {
+            case Right(a) => BiIO.embed(BiIO.attemptBi(use(a)))
+            case l @ Left(_) => BaseIO.pure(l.rightCast[B])
+          } {
+            case (Left(_), _) => BaseIO.unit
+            case (Right(a), ExitCase.Completed) =>
+              BiIO.embed(BiIO.attemptBi(release(a, ExitCase.Completed))).flatMap {
+                case Left(l) => ref.set(Some(l))
+                case Right(_) => BaseIO.unit
               }
-              .flatMap {
-                case Right(b) =>
-                  ref.get.flatMap(_.fold(BaseIO.pure(b))(e => BaseIO.raiseError(BiIO.CustomException(e))))
-                case Left(e) => BaseIO.raiseError(BiIO.CustomException(e))
-              }
+            case (Right(a), res) => BiIO.embed(BiIO.attemptBi(release(a, res))).void
           }
-        )
+          .flatMap {
+            case Right(b) =>
+              ref.get.flatMap(_.fold(BaseIO.pure(b))(e => BaseIO.raiseError(BiIO.CustomException(e))))
+            case Left(e) => BaseIO.raiseError(BiIO.CustomException(e))
+          }
+      }
+    )
 
-      def suspend[A](thunk: => BiIO[E, A]): BiIO[E, A] = BiIO.suspendBi(thunk)
+  def suspend[A](thunk: => BiIO[E, A]): BiIO[E, A] = BiIO.suspendBi(thunk)
 
-      def async[A](k: (Either[Throwable, A] => Unit) => Unit): BiIO[E, A] = BiIO.async(k)
+  def async[A](k: (Either[Throwable, A] => Unit) => Unit): BiIO[E, A] = BiIO.async(k)
 
-      def asyncF[A](k: (Either[Throwable, A] => Unit) => BiIO[E, Unit]): BiIO[E, A] =
-        BiIO.create(BaseIO.asyncF(cb => BiIO.embed(k(cb))))
+  def asyncF[A](k: (Either[Throwable, A] => Unit) => BiIO[E, Unit]): BiIO[E, A] =
+    BiIO.create(BaseIO.asyncF(cb => BiIO.embed(k(cb))))
+}
+
+abstract private[bi] class BiIOInstances extends BiIOInstancesLowPriority {
+  implicit def catsEffectBiConcurrentForBiIO[E](implicit cs: ContextShift[BiIO[E, *]]): Concurrent[BiIO[E, *]] =
+    new Concurrent[BiIO[E, *]] with AsyncBiIO[E] {
+      implicit val contextShiftBaseIO: ContextShift[BaseIO] = BiIO.contextShiftForBaseIO
 
       protected def biFiber[A](fiber: Fiber[BaseIO, A]): Fiber[BiIO[E, *], A] =
         Fiber(BiIO.create(fiber.join), BiIO.create(fiber.cancel))
@@ -264,5 +278,33 @@ abstract private[bi] class BiIOInstances {
           case Right((fib, b)) => Right((biFiber(fib), b))
         })
 
+    }
+
+  implicit val catsEffectBiBifunctorForBiIO: Bifunctor[BiIO] = new Bifunctor[BiIO] {
+    def bimap[A, B, C, D](fab: BiIO[A, B])(f: A => C, g: B => D): BiIO[C, D] =
+      fab.attemptBi.map(_.bimap(f, g)).rethrowBi
+  }
+
+  implicit def catsEffectBiSemigroupKForBiIO[E]: SemigroupK[BiIO[E, *]] =
+    new SemigroupK[BiIO[E, *]] {
+      def combineK[A](x: BiIO[E, A], y: BiIO[E, A]): BiIO[E, A] = x.handleErrorWith(_ => y)
+    }
+}
+
+abstract private[bi] class BiIOInstancesLowPriority extends BiIOInstancesLowPriority2 {
+  implicit def catsEffectBiAsyncForBiIO[E]: Async[BiIO[E, *]] = new AsyncBiIO[E] {}
+}
+
+abstract private[bi] class BiIOInstancesLowPriority2 {
+  implicit def catsEffectBiMonadErrorForBiIO[E]: MonadError[BiIO[E, *], E] =
+    new MonadError[BiIO[E, *], E] with MonadBiIO[E] {
+
+      def raiseError[A](e: E): BiIO[E, A] = BiIO.raiseError(e)
+
+      def handleErrorWith[A](fa: BiIO[E, A])(f: E => BiIO[E, A]): BiIO[E, A] =
+        BiIO.create(BiIO.embed(fa).handleErrorWith {
+          case BiIO.CustomException(e) => BiIO.embed(f(e.asInstanceOf[E]))
+          case t => BaseIO.raiseError(t)
+        })
     }
 }

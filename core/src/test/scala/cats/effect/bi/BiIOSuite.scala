@@ -18,6 +18,9 @@ import TestInstances.eqThrowable
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream
 import scala.util.control.NonFatal
+import cats.laws.discipline.BifunctorTests
+import cats.laws.discipline.MonadErrorTests
+import cats.laws.discipline.SemigroupKTests
 
 class BiIOSuite extends munit.DisciplineSuite {
   def checkAllAsync(name: String, f: TestContext => Laws#RuleSet): Unit = {
@@ -47,6 +50,27 @@ class BiIOSuite extends munit.DisciplineSuite {
     { implicit ec =>
       implicit val cs: ContextShift[BiIO[String, *]] = BiIO.contextShift(ec)
       ConcurrentTests[BiIO[String, *]].concurrent[Int, Int, Int]
+    }
+  )
+
+  checkAllAsync(
+    "BiIO",
+    { implicit ec =>
+      BifunctorTests[BiIO].bifunctor[Int, Int, Int, Int, Int, Int]
+    }
+  )
+
+  checkAllAsync(
+    "BiIO[String, *]",
+    { implicit ec =>
+      MonadErrorTests[BiIO[String, *], String].monadError[Int, Int, Int]
+    }
+  )
+
+  checkAllAsync(
+    "BiIO[String, *]",
+    { implicit ec =>
+      SemigroupKTests[BiIO[String, *]].semigroupK[Int]
     }
   )
 }
