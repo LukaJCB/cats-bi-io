@@ -1,26 +1,16 @@
 package cats.effect.bi
 
-import cats.effect.laws.ConcurrentLaws
-import cats.effect.laws.util.TestContext
-import org.typelevel.discipline.Laws
-import org.scalacheck.Prop.forAll
-import org.scalacheck.Prop
 import cats.effect.ContextShift
+import cats.effect.bi.BiIO.{pure, raiseError, terminate}
 import cats.effect.laws.discipline.ConcurrentTests
-import cats.implicits._
-import org.scalacheck.Arbitrary
-import org.scalacheck.Cogen
 import cats.effect.laws.discipline.arbitrary.catsEffectLawsArbitraryForIO
-import org.scalacheck.Gen
+import cats.effect.laws.util.{TestContext, TestInstances}
+import cats.effect.laws.util.TestInstances.eqThrowable
+import cats.implicits._
 import cats.kernel.Eq
-import cats.effect.laws.util.TestInstances
-import TestInstances.eqThrowable
-import java.io.ByteArrayOutputStream
-import java.io.PrintStream
-import scala.util.control.NonFatal
-import cats.laws.discipline.BifunctorTests
-import cats.laws.discipline.MonadErrorTests
-import cats.laws.discipline.SemigroupKTests
+import cats.laws.discipline.{BifunctorTests, MonadErrorTests, SemigroupKTests}
+import org.scalacheck.{Arbitrary, Cogen, Gen}
+import org.typelevel.discipline.Laws
 
 class BiIOSuite extends munit.DisciplineSuite {
   def checkAllAsync(name: String, f: TestContext => Laws#RuleSet): Unit = {
@@ -40,10 +30,7 @@ class BiIOSuite extends munit.DisciplineSuite {
     )
 
   implicit def eqBiIO[E: Eq, A: Eq](implicit ec: TestContext): Eq[BiIO[E, A]] =
-    new Eq[BiIO[E, A]] {
-      def eqv(x: BiIO[E, A], y: BiIO[E, A]): Boolean =
-        TestInstances.eqIO[Either[E, A]].eqv(BiIO.toEitherIO(x), BiIO.toEitherIO(y))
-    }
+    (x: BiIO[E, A], y: BiIO[E, A]) => TestInstances.eqIO[Either[E, A]].eqv(BiIO.toEitherIO(x), BiIO.toEitherIO(y))
 
   checkAllAsync(
     "BiIO[String, *]",
@@ -73,4 +60,28 @@ class BiIOSuite extends munit.DisciplineSuite {
       SemigroupKTests[BiIO[String, *]].semigroupK[Int]
     }
   )
+
+  test("IO <-> BiIO type inference") {
+    val x: BiIO[INothing, Int] = pure(5)
+    val y: IO[Int] = x
+
+    val xx: IO[Int] = pure(5)
+    val yy: BiIO[INothing, Int] = xx
+  }
+
+  test("Left Right combined inference") {
+    val pureValue: IO[Int] = pure(5)
+    val errValue: BiIO[RuntimeException, INothing] = raiseError(new RuntimeException)
+
+    val combined1: BiIO[RuntimeException, Int] = pureValue
+    val combined2: BiIO[RuntimeException, Int] = errValue
+  }
+
+  test("Recovery") {
+    val ioa: BiIO[INothing, 5] = terminate(new RuntimeException())
+
+    // todo: need companion object
+    import BiIO._
+    assertEquals(ioa.recover { case e => 5 }.unsafeRunSync(), 5)
+  }
 }
