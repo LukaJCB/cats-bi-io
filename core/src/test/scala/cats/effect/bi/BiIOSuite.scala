@@ -78,10 +78,10 @@ class BiIOSuite extends munit.DisciplineSuite {
   }
 
   test("Recovery") {
-    val ioa: BiIO[INothing, 5] = terminate(new RuntimeException())
+    val ioa: BiIO[INothing, Int] = terminate(new RuntimeException())
 
     // todo: need companion object
     import BiIO._
-    assertEquals(ioa.recover { case e => 5 }.unsafeRunSync(), 5)
+    assertEquals(ioa.recover { case _ => 5 }.unsafeRunSync(), 5)
   }
 }
