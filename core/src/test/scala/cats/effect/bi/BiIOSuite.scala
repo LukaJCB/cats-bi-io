@@ -84,4 +84,39 @@ class BiIOSuite extends munit.DisciplineSuite {
     import BiIO._
     assertEquals(ioa.recover { case _ => 5 }.unsafeRunSync(), 5)
   }
+
+  test("map and flatMap") {
+    val bio: BiIO[INothing, Int] = BiIO.pure(5)
+
+    val exp = for {
+      a <- bio
+      b <- bio
+    } yield a + b
+
+    assertEquals(10, exp.unsafeRunSync())
+  }
+
+  test("map2") {
+    val bio: BiIO[INothing, Int] = BiIO.pure(5)
+
+    val exp = bio.map2(bio)(_ + _)
+
+    assertEquals(10, exp.unsafeRunSync())
+  }
+
+  test("flatMap is unambiguous with cats syntax import") {
+    import cats.syntax.flatMap._
+
+    val bio: BiIO[INothing, Int] = BiIO.pure(5)
+
+    bio.flatMap(_ => bio)
+  }
+
+  test("map2 is unambiguous with cats syntax import") {
+    import cats.syntax.applicative._
+
+    val bio: BiIO[INothing, Int] = BiIO.pure(5)
+
+    bio.map2(bio)(_ + _)
+  }
 }

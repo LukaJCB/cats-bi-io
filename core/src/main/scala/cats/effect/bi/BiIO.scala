@@ -1,10 +1,10 @@
 package cats.effect.bi
 
-import cats.{Bifunctor, Eval, Monad, MonadError, Now, SemigroupK}
 import cats.data.EitherT
 import cats.effect.concurrent.Ref
 import cats.effect.{Async, Concurrent, ContextShift, ExitCase, Fiber, IO => BaseIO}
 import cats.implicits._
+import cats.{Bifunctor, Eval, Monad, MonadError, Now, SemigroupK}
 
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success, Try}
@@ -151,7 +151,7 @@ object BiIO extends BiIOInstances {
   private[bi] case class CustomException[+E](e: E) extends Exception
 }
 
-sealed abstract private[bi] class BiIOOps[+E, +A](val bio: BiIO[E, A]) {
+sealed abstract private[bi] class BiIOOps[E, A](val bio: BiIO[E, A]) {
 
   def attempt: BiIO[E, Either[E, A]] =
     BiIO.create(
@@ -166,7 +166,7 @@ sealed abstract private[bi] class BiIOOps[+E, +A](val bio: BiIO[E, A]) {
         )
     )
 
-  def attemptBi[EE >: E, AA >: A]: IO[Either[EE, AA]] =
+  def attemptBi: IO[Either[E, A]] =
     BiIO.create(
       BiIO
         .embed(bio)
@@ -186,15 +186,19 @@ sealed abstract private[bi] class BiIOOps[+E, +A](val bio: BiIO[E, A]) {
 
   def toBaseIO: BaseIO[A] = BiIO.embed(bio)
 
-  def map[B](f: A => B): BiIO[E, B] = BiIO.create(BiIO.embed(bio).map(f))
-
-  def toEitherT[EE >: E, AA >: A]: EitherT[BaseIO, EE, AA] =
-    EitherT(BiIO.embed(attemptBi: BiIO[INothing, Either[E, A]]))
+  def toEitherT: EitherT[BaseIO, E, A] = EitherT(BiIO.embed(attemptBi))
 
   def unsafeRunToEither(): Either[E, A] = BiIO.embed(attempt).unsafeRunSync()
 
   def unsafeRunSync(): A = BiIO.embed(bio).unsafeRunSync()
 
+  private def asyncBiIO: AsyncBiIO[E] = new AsyncBiIO[E] {}
+
+  def map[B](f: A => B): BiIO[E, B] = asyncBiIO.map(bio)(f)
+
+  def flatMap[B](f: A => BiIO[E, B]): BiIO[E, B] = asyncBiIO.flatMap(bio)(f)
+
+  def map2[B, Z](second: BiIO[E, B])(f: (A, B) => Z): BiIO[E, Z] = asyncBiIO.map2(bio, second)(f)
 }
 
 private[bi] trait MonadBiIO[E] extends Monad[BiIO[E, *]] {
